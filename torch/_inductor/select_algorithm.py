@@ -517,8 +517,25 @@ class TritonTemplate(KernelTemplate):
         suffix_args=0,
         epilogue_fn=identity,
         subgraphs=None,
+        mutated_inputs=None,
         **kwargs,
     ):
+        """This function generates a TritonTemplateCaller
+
+        Args:
+            input_nodes: List of input nodes
+            layout: Output layout
+            num_stages: Number of stages for triton launch
+            num_warps: Number of warps for triton launch
+            prefix_args: Number of input nodes to be passed as arguments
+            suffix_args: Number of input nodes to be passed as arguments
+            epilogue_fn: Optional epilogue function to be called on the output
+            subgraphs: Optional subgraphs to be passed as arguments, these will be inlined
+                into the triton template string
+            mutated_inputs: Optional list of input nodes that are mutated by the kernel, this is helpful
+                if you need to return multiple outputs. You can pass them as inputs and mark them as
+                being mutated by the kernel.
+        """
         assert self.template, "requires jinja2"
         defines = StringIO()
         for name, val in kwargs.items():
@@ -649,6 +666,7 @@ class TritonTemplate(KernelTemplate):
                 "allow_tf32": str(kwargs.get("ALLOW_TF32", None)),
                 "acc_type": str(kwargs.get("ACC_TYPE", None)),
             },
+            mutated_inputs=mutated_inputs,
         )
 
 
@@ -719,6 +737,7 @@ class TritonTemplateCaller(ir.TritonTemplateCallerBase):
         log_info: Optional[
             Dict[str, Union[PrimitiveInfoType, List[PrimitiveInfoType]]]
         ] = None,
+        mutated_inputs=None,
     ):
         super().__init__(name, input_nodes, layout)
         self.make_kernel_render = make_kernel_render
@@ -735,6 +754,7 @@ class TritonTemplateCaller(ir.TritonTemplateCallerBase):
                 "num_warps": self.bmreq.num_warps,
             }
         )
+        self.mutated_inputs = mutated_inputs
 
     def benchmark(self, *args, out):
         assert self.bmreq is not None
@@ -765,6 +785,7 @@ class TritonTemplateCaller(ir.TritonTemplateCallerBase):
                 inputs=self.input_nodes,
                 make_kernel_render=self.make_kernel_render,
                 debug_extra=self.debug_extra,
+                mutated_inputs=self.mutated_inputs,
             )
         )
 
@@ -891,6 +912,13 @@ class AlgorithmSelectorCache(PersistentCache):
         return_multi_template=False,
     ):
         from .codegen.cuda.cuda_kernel import CUDATemplateCaller
+
+        # Templates selected with input_gen_fns require specific input data to avoid IMA
+        # Passing custom input gen fns to benchmark_fusion NYI, so skip deferred template selection
+        if input_gen_fns is not None:
+            return_multi_template = False
+
+        # TODO - assert that we have not mutating kernels here
 
         # TODO(nmacchioni): remove once CI tests are fixed
         choices = [choice for choice in choices if choice is not None]
@@ -1028,7 +1056,7 @@ class AlgorithmSelectorCache(PersistentCache):
 
         precompile_fn = precompile(choices)
 
-        if return_multi_template:
+        if return_multi_template and (config.max_autotune or config.max_autotune_gemm):
 
             def get_timings():
                 timings = do_autotuning(precompile_fn)
@@ -1315,11 +1343,9 @@ def autotune_select_algorithm(*args, **kwargs):
         _ALGORITHM_SELECTOR_CACHE = AlgorithmSelectorCache()
 
     if "return_multi_template" not in kwargs:
-        # TODO - enable multi templates even if benchmark_fusion not enabled
-        kwargs["return_multi_template"] = (
-            torch._inductor.config.benchmark_multi_templates
-            and torch._inductor.config.benchmark_fusion
-        )
+        kwargs[
+            "return_multi_template"
+        ] = torch._inductor.config.benchmark_multi_templates
 
     return _ALGORITHM_SELECTOR_CACHE(*args, **kwargs)
 
