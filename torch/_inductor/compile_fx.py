@@ -11,10 +11,10 @@ from itertools import count
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from unittest import mock
 
-from functorch.compile import min_cut_rematerialization_partition
-
 import torch.fx
 import torch.utils._pytree as pytree
+
+from functorch.compile import min_cut_rematerialization_partition
 from torch._dynamo import (
     compiled_autograd,
     config as dynamo_config,
@@ -63,7 +63,7 @@ if config.is_fbcode():
     from torch._inductor.fb.utils import log_optimus_to_scuba, time_and_log
 else:
     # no-op decorator
-    def time_and_log(attr: str, extra_loggings: Optional[Dict[str, str]] = None):
+    def time_and_log(attr: str):
         return dynamo_utils.identity
 
 
@@ -389,10 +389,7 @@ def get_patched_config_dict(config_patches=None) -> Dict[str, Any]:
 
 @DebugContext.wrap
 @torch.utils._python_dispatch._disable_current_modes()
-@time_and_log(
-    attr="compilation time (in seconds)",
-    extra_loggings={"config_dict": str(get_patched_config_dict())},
-)
+@time_and_log(attr="compilation time (in seconds)")
 # Need this decorator for compile_fx_inner even if we already have one for
 # compile_fx. The reason is the compilation for backward graph may happen after
 # compile_fx return and we may want to use the _LazyGraphModule for compiling
@@ -680,7 +677,7 @@ def fx_codegen_and_compile(
             payload_fn=lambda: gm.print_readable(print_output=False),
         )
         if config.is_fbcode():
-            log_optimus_to_scuba()
+            log_optimus_to_scuba(extra_logging={"pt2_configs": str(get_patched_config_dict())})
 
     with V.set_fake_mode(fake_mode), maybe_disable_comprehensive_padding(
         example_inputs
