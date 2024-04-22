@@ -1230,6 +1230,24 @@ class AOTInductorTestsTemplate:
         )
         self.check_model(Model(self.device), example_inputs)
 
+    @config.patch(freezing=True)
+    def test_buffer_mutation_4(self):
+        class Model(torch.nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.register_buffer("foo", torch.rand((3, 10), device=device))
+
+            def forward(self, x):
+                lx = [x, x.clone(), x.clone()]
+                y = []
+                for i in range(3):
+                    y.append(lx[i] + self.foo[i])
+                return torch.cat(y, 1)
+        with torch.no_grad():
+            example_inputs = (torch.rand(1, 10, device=self.device),)
+            torch._export.aot_compile(Model(self.device), example_inputs)
+            self.check_model(Model(self.device), example_inputs)
+
     @skipIfRocm
     @requires_multigpu()
     def test_replicate_on_devices(self):
